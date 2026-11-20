@@ -1,15 +1,18 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 from fastmcp import FastMCP
+from google import genai
 
 mcp = FastMCP("Task-Manager-MCP")
 
 DB_PATH = Path(__file__).resolve().parent / "tasks.db"
 PRIORIDADES_VALIDAS = ("baja", "media", "alta")
 ESTADOS_VALIDOS = ("pendiente", "en_progreso", "completada")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def _ahora_iso() -> str:
@@ -199,6 +202,95 @@ def resumen_productividad() -> str:
             "por_estado": por_estado,
             "activas_por_prioridad": pendientes_por_prioridad,
             "por_etiqueta": por_etiqueta,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _llamar_gemini(prompt: str, modelo: str = "") -> tuple[str | None, str | None, str | None]:
+    """Ejecuta un prompt en Gemini usando GEMINI_API_KEY/GOOGLE_API_KEY.
+
+    Retorna (modelo_usado, texto_respuesta, error_json).
+    """
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not api_key:
+        return (
+            None,
+            None,
+            _error_json(
+                "Falta la variable de entorno GEMINI_API_KEY. "
+                "Configúrala en Prefect Horizon (Environment Variables) o en tu terminal local."
+            ),
+        )
+
+    modelo_objetivo = modelo.strip() or DEFAULT_GEMINI_MODEL
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model=modelo_objetivo, contents=prompt)
+        texto = (response.text or "").strip()
+        if not texto:
+            return modelo_objetivo, None, _error_json("Gemini no devolvió texto en la respuesta.")
+        return modelo_objetivo, texto, None
+    except Exception as exc:
+        return modelo_objetivo, None, _error_json(f"Error al consultar Gemini ({modelo_objetivo}): {exc}")
+
+
+@mcp.tool()
+def consultar_gemini(prompt: str, modelo: str = "") -> str:
+    """Envía una consulta directa a la API de Gemini usando la variable GEMINI_API_KEY del servidor."""
+    prompt_limpio = prompt.strip()
+    if not prompt_limpio:
+        return _error_json("El prompt no puede estar vacío.")
+
+    modelo_usado, texto, error = _llamar_gemini(prompt_limpio, modelo)
+    if error:
+        return error
+
+    return json.dumps(
+        {"modelo": modelo_usado, "respuesta": texto},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def planificar_tareas_con_gemini(objetivo: str = "", modelo: str = "") -> str:
+    """Analiza las tareas pendientes o en progreso y genera un plan priorizado usando Gemini."""
+    with _get_connection() as conn:
+        activas = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, titulo, descripcion, prioridad, estado, etiqueta "
+                "FROM tareas WHERE estado != 'completada' ORDER BY id ASC"
+            ).fetchall()
+        ]
+
+    if not activas:
+        return json.dumps(
+            {"mensaje": "No hay tareas pendientes ni en progreso para planificar.", "tareas_analizadas": 0},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    contexto_objetivo = objetivo.strip() or "Maximizar avance resolviendo primero lo más urgente e importante."
+    prompt = (
+        "Eres un asistente de productividad técnico. "
+        "Con base en estas tareas activas en formato JSON, genera un plan breve y accionable en español "
+        "ordenando qué hacer primero, por qué, y el primer paso concreto para cada una.\n\n"
+        f"Objetivo del usuario: {contexto_objetivo}\n\n"
+        f"Tareas activas:\n{json.dumps(activas, ensure_ascii=False, indent=2)}"
+    )
+
+    modelo_usado, plan, error = _llamar_gemini(prompt, modelo)
+    if error:
+        return error
+
+    return json.dumps(
+        {
+            "modelo": modelo_usado,
+            "tareas_analizadas": len(activas),
+            "plan": plan,
         },
         ensure_ascii=False,
         indent=2,

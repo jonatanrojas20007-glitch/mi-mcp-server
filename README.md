@@ -5,8 +5,9 @@ Colección de servidores **Model Context Protocol (MCP)** desarrollados con `Fas
 ## Servidores incluidos
 
 1. **`mcp_server_tasks/`** — `Task-Manager-MCP`
-   - Gestor de tareas con persistencia local en SQLite (`tasks.db` generado automáticamente).
-   - Herramientas: `crear_tarea`, `listar_tareas`, `actualizar_estado_tarea`, `eliminar_tarea`, `resumen_productividad`.
+   - Gestor de tareas con persistencia local en SQLite (`tasks.db` generado automáticamente) e integración opcional con la API de Gemini (`google-genai`).
+   - Herramientas: `crear_tarea`, `listar_tareas`, `actualizar_estado_tarea`, `eliminar_tarea`, `resumen_productividad`, `consultar_gemini`, `planificar_tareas_con_gemini`.
+   - Variable de entorno para las herramientas de IA: `GEMINI_API_KEY` (opcionalmente `GEMINI_MODEL`, por defecto `gemini-3.8-flash`).
    - Incluye cliente de prueba en `mcp_server_tasks/client.py`.
 
 2. **`mcp_server_db/`** — `Database-Analytics-Server`

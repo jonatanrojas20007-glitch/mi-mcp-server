@@ -39,7 +39,10 @@ async def main() -> None:
         print("\n4) Resumen de productividad:")
         print(await client.call_tool("resumen_productividad"))
 
-        print(f"\n5) Eliminando tarea de prueba {nueva_id}:")
+        print("\n5) Planificar tareas con Gemini (requiere GEMINI_API_KEY):")
+        print(await client.call_tool("planificar_tareas_con_gemini", {"objetivo": "Completar pruebas hoy"}))
+
+        print(f"\n6) Eliminando tarea de prueba {nueva_id}:")
         print(await client.call_tool("eliminar_tarea", {"tarea_id": nueva_id}))
 
 
