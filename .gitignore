@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Bases de datos generadas localmente
+*.db
+*.sqlite
+*.sqlite3
+
+# Entorno y sistema
+.env
+.DS_Store
+Thumbs.db
