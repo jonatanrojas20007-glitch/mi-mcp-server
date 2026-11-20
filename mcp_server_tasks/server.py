@@ -4,12 +4,13 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 from fastmcp import FastMCP
 from google import genai
 
 mcp = FastMCP("Task-Manager-MCP")
 
-DB_PATH = Path(__file__).resolve().parent / "tasks.db"
+DB_PATH: Path = Path(__file__).resolve().parent / "tasks.db"
 PRIORIDADES_VALIDAS = ("baja", "media", "alta")
 ESTADOS_VALIDOS = ("pendiente", "en_progreso", "completada")
 DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
@@ -21,9 +22,9 @@ def _ahora_iso() -> str:
 
 
 @contextmanager
-def _get_connection():
+def _get_connection(db_path: Path | None = None):
     """Abre una conexión SQLite con row_factory como diccionario y la cierra al salir."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path or DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -32,35 +33,58 @@ def _get_connection():
         conn.close()
 
 
+def _candidatos_db() -> list[Path]:
+    """Devuelve rutas candidatas para SQLite (TASKS_DB_PATH, carpeta local o temporal)."""
+    env_path = os.getenv("TASKS_DB_PATH", "").strip()
+    if env_path:
+        return [Path(env_path).expanduser().resolve()]
+    return [
+        Path(__file__).resolve().parent / "tasks.db",
+        Path(tempfile.gettempdir()) / "task_manager_mcp" / "tasks.db",
+    ]
+
+
 def _init_db() -> None:
-    """Inicializa la tabla de tareas y carga ejemplos si está vacía."""
-    with _get_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tareas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                titulo TEXT NOT NULL,
-                descripcion TEXT NOT NULL DEFAULT '',
-                prioridad TEXT NOT NULL DEFAULT 'media',
-                estado TEXT NOT NULL DEFAULT 'pendiente',
-                etiqueta TEXT NOT NULL DEFAULT 'general',
-                creada_en TEXT NOT NULL,
-                completada_en TEXT
-            )
-        """)
-        total = conn.execute("SELECT COUNT(*) FROM tareas").fetchone()[0]
-        if total == 0:
-            ahora = _ahora_iso()
-            conn.executemany(
-                """
-                INSERT INTO tareas (titulo, descripcion, prioridad, estado, etiqueta, creada_en)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    ("Configurar servidor MCP", "Validar herramientas con MCP Inspector", "alta", "en_progreso", "mcp", ahora),
-                    ("Documentar endpoints", "Agregar ejemplos de uso en el repositorio", "media", "pendiente", "docs", ahora),
-                    ("Revisar logs de prueba", "Verificar formato de salida JSON", "baja", "completada", "qa", ahora),
-                ],
-            )
+    """Inicializa la tabla de tareas en la primera ruta escribible y carga ejemplos si está vacía."""
+    global DB_PATH
+    ultimo_error: Exception | None = None
+
+    for candidato in _candidatos_db():
+        try:
+            candidato.parent.mkdir(parents=True, exist_ok=True)
+            with _get_connection(candidato) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS tareas (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        titulo TEXT NOT NULL,
+                        descripcion TEXT NOT NULL DEFAULT '',
+                        prioridad TEXT NOT NULL DEFAULT 'media',
+                        estado TEXT NOT NULL DEFAULT 'pendiente',
+                        etiqueta TEXT NOT NULL DEFAULT 'general',
+                        creada_en TEXT NOT NULL,
+                        completada_en TEXT
+                    )
+                """)
+                total = conn.execute("SELECT COUNT(*) FROM tareas").fetchone()[0]
+                if total == 0:
+                    ahora = _ahora_iso()
+                    conn.executemany(
+                        """
+                        INSERT INTO tareas (titulo, descripcion, prioridad, estado, etiqueta, creada_en)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            ("Configurar servidor MCP", "Validar herramientas con MCP Inspector", "alta", "en_progreso", "mcp", ahora),
+                            ("Documentar endpoints", "Agregar ejemplos de uso en el repositorio", "media", "pendiente", "docs", ahora),
+                            ("Revisar logs de prueba", "Verificar formato de salida JSON", "baja", "completada", "qa", ahora),
+                        ],
+                    )
+            DB_PATH = candidato
+            return
+        except (OSError, sqlite3.Error) as exc:
+            ultimo_error = exc
+
+    raise RuntimeError(f"No se pudo inicializar SQLite en ninguna ruta escribible: {ultimo_error}")
 
 
 def _error_json(mensaje: str) -> str:
